@@ -3,8 +3,8 @@ import os
 import matplotlib.pyplot as plt
 
 # === 文件路径设置 ===
-load_path = 'pm_cluster'
-file_name = 'pm_points_raw_1749545953.npz'
+load_path = 'clusterdata'
+file_name = '0_points_raw_1749546812.npz'
 filepath = os.path.join(load_path, file_name)
 
 # === 输出路径 ===
@@ -63,7 +63,7 @@ for lid in unique_ids:
     med = np.median(residuals)
     mad = np.median(np.abs(residuals - med))
     if mad < 1e-6:
-        mask_filtered = np.abs(residuals) < 0.002
+        mask_filtered = np.abs(residuals) < 0.02
     else:
         mask_filtered = np.abs(residuals - med) < 0.7 * mad
 
@@ -71,7 +71,6 @@ for lid in unique_ids:
     y_filt = y[mask_filtered]
 
     if len(x_filt) >= min_points_per_line:
-    
         m2, b2 = np.polyfit(x_filt, y_filt, 1)
         y_pred2 = m2 * x_filt + b2
         rmse2 = np.sqrt(np.mean((y_filt - y_pred2) ** 2))
