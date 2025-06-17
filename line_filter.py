@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 
 # === 文件路径设置 ===
 load_path = 'clusterdata'
-file_name = '0_points_raw_1749546812.npz'
+file_name = 'pm_points_raw_1749545740.npz'
 filepath = os.path.join(load_path, file_name)
 
 # === 输出路径 ===
@@ -40,6 +40,12 @@ for suffix in field_suffixes:
 all_xyz = data_fields['xyz']
 all_id = data_fields['ch']
 all_theta = data_fields.get('theta', np.zeros(len(all_id)))
+
+# 滤波前的点云可视化
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+ax.scatter(all_xyz[:,0], all_xyz[:,1], all_xyz[:,2], s=1)
+plt.show()
 
 unique_ids = np.unique(all_id)
 min_points_per_line = 5

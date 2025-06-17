@@ -16,12 +16,17 @@ def plot_pointcloud(xyz, color=None, title="Point Cloud", size=1):
     fig = plt.figure(figsize=(10, 8))
     ax = fig.add_subplot(111, projection='3d')
     ax.scatter(xyz[:, 0], xyz[:, 1], xyz[:, 2], c=color, cmap='viridis', s=size)
+
     ax.set_title(title)
     ax.set_xlabel('X')
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
+
+    # 固定 x 范围
+    ax.set_xlim(0.3, 0.8)
     plt.tight_layout()
     plt.show()
+
 
 #plot_pointcloud(xyz, color=ch, title="Original Point Cloud (colored by channel)", size=1)
 
@@ -30,10 +35,10 @@ def plot_pointcloud(xyz, color=None, title="Point Cloud", size=1):
 print(f"原始点数: {xyz.shape[0]}")
 
 # 3.1 去除包含 NaN 的点
-mask_valid = np.isfinite(xyz).all(axis=1)
-xyz = xyz[mask_valid]
-ch = ch[mask_valid]
-print(f"去除NaN后点数: {xyz.shape[0]}")
+#mask_valid = np.isfinite(xyz).all(axis=1)
+#xyz = xyz[mask_valid]
+#ch = ch[mask_valid]
+#print(f"去除NaN后点数: {xyz.shape[0]}")
 
 # 3.2 基于统计的离群点去除
 def statistical_outlier_removal(points, k=30, std_mult=2.5):
@@ -67,29 +72,6 @@ mask_plane = plane_fitting_filter(xyz)
 xyz = xyz[mask_plane]
 ch = ch[mask_plane]
 print(f"平面拟合滤波后点数: {xyz.shape[0]}")
-
-# 3.4 迭代统计滤波
-def iterative_statistical_filter(points, iterations=2, k_values=[15, 10], std_mult_values=[1.8, 1.5]):
-    mask = np.ones(len(points), dtype=bool)
-    for i in range(iterations):
-        k = k_values[i]
-        std_mult = std_mult_values[i]
-        current_points = points[mask]
-        if len(current_points) == 0:
-            break
-        tree = KDTree(current_points)
-        distances, _ = tree.query(current_points, k=k+1)
-        mean_distances = np.mean(distances[:, 1:], axis=1)
-        threshold = np.mean(mean_distances) + std_mult * np.std(mean_distances)
-        current_mask = mean_distances < threshold
-        mask_indices = np.where(mask)[0]
-        mask[mask_indices] = current_mask
-    return mask
-
-mask_iter = iterative_statistical_filter(xyz)
-xyz = xyz[mask_iter]
-ch = ch[mask_iter]
-print(f"迭代滤波后点数: {xyz.shape[0]}")
 
 # ========= 4. 可视化滤波后点云 =========
 plot_pointcloud(xyz, color=ch, title="Filtered Point Cloud (colored by channel)", size=2)

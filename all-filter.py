@@ -1,93 +1,164 @@
 import numpy as np
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 from scipy.spatial import KDTree
-import os
+import matplotlib.pyplot as plt
 
-# ========= 1. 读取原始 npz 文件 =========
-data = np.load('aligned_merged.npz')
-output_path = 'finaldata.npz'
-# 只提取 xyz 和 ch 字段
-xyz = data['xyz']       # (N, 3)  
+def clean_bending_bottom_edges_numpy(xyz, z_range=0.025, fit_axis='x', max_dev=0.01):
+    
+    # 1. 提取底部点
+    min_z = np.min(xyz[:, 2])
+    mask_bottom = xyz[:, 2] < min_z + z_range
+    bottom_points = xyz[mask_bottom]
 
-# ========= 2. 可视化滤波前点云 =========
-def plot_pointcloud(xyz, color=None, title="Point Cloud", size=1):
-    fig = plt.figure(figsize=(10, 8))
-    ax = fig.add_subplot(111, projection='3d')
-    ax.scatter(xyz[:, 0], xyz[:, 1], xyz[:, 2], c=color, cmap='viridis', s=size)
-    ax.set_title(title)
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-    plt.tight_layout()
-    plt.show()
+    if bottom_points.shape[0] < 10:
+        print("底部点过少，跳过清理")
+        return xyz
 
-# ========= 3. 滤波算法 =========
+    # 2. 拟合直线（最小二乘法）
+    if fit_axis == 'x':
+        x = bottom_points[:, 0]
+        y = bottom_points[:, 1]
+    else:
+        x = bottom_points[:, 1]
+        y = bottom_points[:, 0]
 
-print(f"原始点数: {xyz.shape[0]}")
+    A = np.vstack([x, np.ones_like(x)]).T
+    m, b = np.linalg.lstsq(A, y, rcond=None)[0]  # y ≈ mx + b
 
-# 3.1 去除包含 NaN 的点
-mask_valid = np.isfinite(xyz).all(axis=1)
-xyz = xyz[mask_valid]
-print(f"去除NaN后点数: {xyz.shape[0]}")
+    # 3. 计算点到拟合直线的距离
+    y_fit = m * x + b
+    residuals = np.abs(y - y_fit)
 
-# 3.2 基于统计的离群点去除
-def statistical_outlier_removal(points, k=30, std_mult=2.5):
+    # 4. 选取偏差较小的点
+    inliers = residuals < max_dev
+    cleaned_bottom = bottom_points[inliers]
+
+    # 5. 其他点拼回
+    remaining = xyz[~mask_bottom]
+    cleaned_xyz = np.vstack([remaining, cleaned_bottom])
+
+    print(f"[清理底部弯折] 总底部点: {len(bottom_points)}, 保留: {len(cleaned_bottom)}, 总剩余点: {len(cleaned_xyz)}")
+
+    return cleaned_xyz
+
+
+# ========== 1. 加载合并点云 ==========
+input_path = 'aligned_merged.npz'
+data = np.load(input_path)
+xyz = data['xyz']
+print(f"[原始点数] {xyz.shape[0]}")
+
+# ========== 2. 去除 NaN ==========
+#mask_valid = np.isfinite(xyz).all(axis=1)
+#xyz = xyz[mask_valid]
+#print(f"[去除 NaN 后] {xyz.shape[0]}")
+
+
+# ========== 3. 统计离群点滤波 ==========
+def statistical_outlier_removal(points, k=25, std_mult=2.5):
     tree = KDTree(points)
-    distances, _ = tree.query(points, k=k+1)
-    mean_distances = np.mean(distances[:, 1:], axis=1)
-    threshold = np.mean(mean_distances) + std_mult * np.std(mean_distances)
-    return mean_distances < threshold
+    dists, _ = tree.query(points, k=k+1)
+    mean_dists = np.mean(dists[:, 1:], axis=1)
+    mean = np.mean(mean_dists)
+    std = np.std(mean_dists)
+    threshold = mean + std_mult * std
+    return mean_dists < threshold
 
-mask_sor = statistical_outlier_removal(xyz)
-xyz = xyz[mask_sor]
-print(f"离群点去除后点数: {xyz.shape[0]}")
+# 第1轮
+mask1 = statistical_outlier_removal(xyz, k=40, std_mult=1.5)
+xyz = xyz[mask1]
+print(f"[统计滤波 1] {xyz.shape[0]}")
+#xyz = clean_bending_bottom_edges_numpy(xyz, fit_axis='x')
+#xyz = clean_bending_bottom_edges_numpy(xyz, fit_axis='y')
 
-# 3.3 基于局部平面拟合的残差分析
-def plane_fitting_filter(points, k=15):
+# 第2轮更严格
+mask2 = statistical_outlier_removal(xyz, k=30, std_mult=1.2)
+xyz = xyz[mask2]
+print(f"[统计滤波 2] {xyz.shape[0]}")
+
+# ========== 4. 平面拟合残差滤波 ==========
+def plane_fitting_filter(points, k=10,residual_threshold=0.01):
     tree = KDTree(points)
     residuals = np.zeros(len(points))
     for i in range(len(points)):
         _, idx = tree.query(points[i], k=k+1)
         neighborhood = points[idx]
         centroid = np.mean(neighborhood, axis=0)
-        cov_matrix = np.cov((neighborhood - centroid).T)
-        eigvals, eigvecs = np.linalg.eigh(cov_matrix)
+        cov = np.cov((neighborhood - centroid).T)
+        eigvals, eigvecs = np.linalg.eigh(cov)
         normal = eigvecs[:, 0]
         residuals[i] = np.abs(np.dot(points[i] - centroid, normal))
-    threshold = np.mean(residuals) + 1.5 * np.std(residuals)
+    mean_res = np.mean(residuals)
+    std_res = np.std(residuals)
+    threshold = mean_res + 1.2 * std_res
     return residuals < threshold
 
-mask_plane = plane_fitting_filter(xyz)
+mask_plane = plane_fitting_filter(xyz, k=15)
 xyz = xyz[mask_plane]
-print(f"平面拟合滤波后点数: {xyz.shape[0]}")
+print(f"[平面拟合滤波] {xyz.shape[0]}")
+xyz = clean_bending_bottom_edges_numpy(xyz, z_range=0.025, fit_axis='x', max_dev=0.01)
+mask_z = xyz[:, 2] >= -0.12
+xyz = xyz[mask_z]
+# ========== 5. 可视化结果 ==========
+fig = plt.figure(figsize=(10, 8))
+ax = fig.add_subplot(111, projection='3d')
+ax.scatter(xyz[:, 0], xyz[:, 1], xyz[:, 2], s=1)
+ax.set_xlabel('X')
+ax.set_ylabel('Y')
+ax.set_zlabel('Z')
+ax.set_title("Filtered Merged Point Cloud")
+plt.tight_layout()
+plt.show()
 
-# 3.4 迭代统计滤波
-def iterative_statistical_filter(points, iterations=2, k_values=[15, 10], std_mult_values=[1.8, 1.5]):
-    mask = np.ones(len(points), dtype=bool)
-    for i in range(iterations):
-        k = k_values[i]
-        std_mult = std_mult_values[i]
-        current_points = points[mask]
-        if len(current_points) == 0:
-            break
-        tree = KDTree(current_points)
-        distances, _ = tree.query(current_points, k=k+1)
-        mean_distances = np.mean(distances[:, 1:], axis=1)
-        threshold = np.mean(mean_distances) + std_mult * np.std(mean_distances)
-        current_mask = mean_distances < threshold
-        mask_indices = np.where(mask)[0]
-        mask[mask_indices] = current_mask
-    return mask
-
-mask_iter = iterative_statistical_filter(xyz)
-xyz = xyz[mask_iter]
-print(f"迭代滤波后点数: {xyz.shape[0]}")
-
-# ========= 4. 可视化滤波后点云 =========
-plot_pointcloud(xyz, title="Filtered Point Cloud", size=2)
-
-# ========= 5. 保存为新 npz 文件 =========
-os.makedirs(os.path.dirname(output_path), exist_ok=True)
+# ========== 6. 保存结果 ==========
+output_path = 'clusterdata/fil_pts/aligned_merged_filtered.npz'
 np.savez(output_path, xyz=xyz)
-print(f"已保存滤波后的点云到：{output_path}")
+print(f"[保存成功] 点云写入：{output_path}")
+
+
+import imageio
+import os
+
+# 创建临时文件夹保存帧图像
+os.makedirs("tmp_frames", exist_ok=True)
+
+# 动图参数
+n_frames = 60  # 旋转一圈的帧数
+elev = 20      # 视角高度
+azim_start = 0 # 起始角度
+gif_path = "clusterdata/fil_pts/rotating_pointcloud.gif"
+frame_paths = []
+
+fig = plt.figure(figsize=(8, 6))
+ax = fig.add_subplot(111, projection='3d')
+
+for i in range(n_frames):
+    ax.clear()
+    ax.scatter(xyz[:, 0], xyz[:, 1], xyz[:, 2], s=1, c='blue')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title("Rotating 3D Point Cloud")
+
+    # 设置视角
+    azim = azim_start + i * (360 / n_frames)
+    ax.view_init(elev=elev, azim=azim)
+
+    # 保存每一帧
+    frame_path = f"tmp_frames/frame_{i:03d}.png"
+    plt.savefig(frame_path, dpi=80)
+    frame_paths.append(frame_path)
+
+plt.close()
+
+# 生成 GIF 动图
+with imageio.get_writer(gif_path, mode='I', duration=0.05, loop=0) as writer:
+    for frame_path in frame_paths:
+        image = imageio.imread(frame_path)
+        writer.append_data(image)
+
+
+# 清理帧图片（可选）
+for path in frame_paths:
+    os.remove(path)
+
+print(f"[动图生成完成] 保存路径: {gif_path}")
